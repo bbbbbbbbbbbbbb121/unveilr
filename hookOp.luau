@@ -1,4 +1,3 @@
--- This requires the Lute luau runtime to function, you must execute this with Lute.
 local parser = require("@std/syntax/parser")
 local fs = require("@std/fs")
 local prettyPrint = true
@@ -207,11 +206,6 @@ function unparser:readstatementF(statement, dontAddDo, ...)
         code = code .. " = "
 
         for i, val in statement.values do
-            local var = statement.variables[i]
-
-            local varName = (var.node.token or {}).text
-            local tag = val.node.tag
-
             local node = val.node
             local var = statement.variables[i]
             if constantCollection and (var and is(var.node, "index") or is(node, "string")) then -- a[x] = 1 or a = "hi"
@@ -602,6 +596,8 @@ callId = args[4] or ""
 constantCollection = args[5] == "1"
 
 if callId == "0" then callId = "" end
+
+print("Constant collection:",constantCollection)
 
 local output = {}
 
