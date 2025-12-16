@@ -148,9 +148,9 @@ function unparser:construct(statement : table) : table
     }
 end
 
-local function is(statement, tag) --> tries to find the deepest mention of 'tag' that does not make it contradict it's original value (for example in a + )
+local function is(statement, tag, deepSearch) --> tries to find the deepest mention of 'tag' that does not make it contradict it's original value (for example in a + )
     if not statement then return false end
-    if statement.tag == tag then return true end
+    if statement.tag == tag then return statement end
     if statement.expression then --> works for groups!
         return is(statement.expression, tag)
     end
@@ -160,11 +160,39 @@ local function is(statement, tag) --> tries to find the deepest mention of 'tag'
     if statement.tag == "unary" then
         return is(statement.operand, tag)
     end
+    if deepSearch then
+        if statement.rhsoperand then
+            return is(statement.rhsoperand, tag)
+        end
+    end
+end
+
+local Spied = {}
+
+local function Spy(statement)
+    local tag = statement.tag
+    if tag == "global" or tag == "call" or tag == "index" or tag == "indexname" then
+        Spied[statement] = true
+    end
 end
 
 local function isSpiedVar(statement, dontIncludeLocals)
-    -- This isn't 100% accurate, it's just if this is false, then you can treat the statement as normal, otherwise hook certain things.
-    return is(statement, "global") or is(statement, "call") or is(statement, "index") or is(statement, "indexname") or (not dontIncludeLocals and statement.tag == "local");
+    -- This isn't 100% accurate, it's just if this is false, then you can treat the statement as normal, otherwise hook certain things. (For optimization)
+    local Binary = is(statement, "binary")
+    if(Binary) then
+        --> keep looking through the operands till u find a spied var
+        if(isSpiedVar(Binary.lhsoperand) or isSpiedVar(Binary.rhsoperand)) then
+            return true;
+        end
+    end
+
+    return
+        is(statement, "global") or
+        is(statement, "call") or
+        is(statement, "index") or
+        is(statement, "indexname") or
+        (not dontIncludeLocals and statement.tag == "local") or
+        Spied[statement];
 end
 
 local function getLength(thing)
@@ -183,8 +211,11 @@ function unparser:readstatementF(statement, dontAddDo, ...)
     --> if dontAddDo is on, it also means that we're in an if check / while loop / something, which means we need to properly close before 'return' or 'break'
     local tag = statement.tag
 
+    Spy(statement)
+
     if tag == "local" then
         local code = "local ";
+        local DoSpy;
         for i, var in statement.variables do
             local variable = var.node.name.text
             code = code .. (i > 1 and "," or "") .. variable
@@ -194,7 +225,9 @@ function unparser:readstatementF(statement, dontAddDo, ...)
         code = code .. " = "
         for i, val in statement.values do
             code = code .. (i > 1 and "," or "") .. self:readexpr(val.node)
+            DoSpy = DoSpy or Spied[val.node]
         end
+        Spied[statement] = Spied[statement] or DoSpy
         return code
     elseif tag == "assign" then
         local code = "";
@@ -462,16 +495,18 @@ function unparser:readexpr(statement, ...)
 
             local Wrapped = (is(rhs, "call") or is(rhs, "unary")) and "function(...)return " .. Rhs .. " end" or Rhs
 
-            if name == "CHECKAND" or name == "CHECKOR" then
-                local _, _, _, isInVararg = ...
-                return callFormat("%s(%s,%s,%s%s)", name, Lhs, Wrapped, tostring(Wrapped ~= Rhs), (isInVararg and ",..." or ""))
-            elseif name == "CONCAT" then
-                if constantCollection and (is(rhs, "call") or is(lhs, "call") or is(rhs, "string") or is(lhs, "string")) then
-                    return callFormat(name .. "(%s,%s)", Lhs, Rhs)
+            if name then
+                if name == "CHECKAND" or name == "CHECKOR" then
+                    local _, _, _, isInVararg = ...
+                    return callFormat("%s(%s,%s,%s%s)", name, Lhs, Wrapped, tostring(Wrapped ~= Rhs), (isInVararg and ",..." or ""))
+                elseif name == "CONCAT" then
+                    if constantCollection and (is(rhs, "call") or is(lhs, "call") or is(rhs, "string") or is(lhs, "string")) then
+                        return callFormat(name .. "(%s,%s)", Lhs, Rhs)
+                    end
+                    return format("%s %s %s", Lhs, operator, Rhs)
+                else
+                    return callFormat("%s(%s, %s)", name, Lhs, Rhs)
                 end
-                return format("%s %s %s", Lhs, operator, Rhs)
-            elseif name then
-                return callFormat("%s(%s, %s)", name, Lhs, Rhs)
             end
 
             --if false then return callFormat("%s(%s,%s)", name, Lhs, Rhs) end
